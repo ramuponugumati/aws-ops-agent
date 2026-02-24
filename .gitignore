@@ -12,3 +12,7 @@ venv/
 ops_agent_audit.log
 *.docx
 *.pptx
+
+# Standalone scripts with real account IDs
+tag_all_resources.py
+test.docx
