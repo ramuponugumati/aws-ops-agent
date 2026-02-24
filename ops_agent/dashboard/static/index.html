@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AWS Ops Agent Dashboard</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+    @font-face{font-family:'Amazon Ember';src:url('https://d1.awsstatic.com/webfonts/amazon-ember/AmazonEmber_Rg.2b36e4e0b2b76.woff2') format('woff2');font-weight:400}
+    @font-face{font-family:'Amazon Ember';src:url('https://d1.awsstatic.com/webfonts/amazon-ember/AmazonEmber_Bd.3e05e37e3d0b8.woff2') format('woff2');font-weight:700}
+  </style>
+  <link rel="stylesheet" href="/static/css/styles.css?v=74">
+</head>
+<body>
+  <nav class="navbar">
+    <div class="nav-brand"><img src="/static/img/ops-agent.svg" alt="" style="width:28px;height:28px;vertical-align:middle;margin-right:8px">AWS Ops Agent</div>
+    <div class="nav-links">
+      <a href="#/" class="nav-link active" data-view="skills">Skills</a>
+      <a href="#/org" class="nav-link" data-view="org">Org</a>
+      <a href="#/chat" class="nav-link" data-view="chat">Chat</a>
+    </div>
+  </nav>
+  <main id="app"></main>
+  <div id="modal-overlay" class="modal-overlay hidden"></div>
+  <div id="toast" class="toast hidden"></div>
+  <script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+  <script>mermaid.initialize({startOnLoad:false, theme:'default'});</script>
+  <script src="/static/js/api.js?v=71"></script>
+  <script src="/static/js/components.js?v=72"></script>
+  <script src="/static/js/app.js?v=71"></script>
+</body>
+</html>

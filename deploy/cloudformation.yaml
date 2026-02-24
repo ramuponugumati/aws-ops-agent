@@ -1,0 +1,263 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: AWS Ops Agent Dashboard — ECS Fargate + ALB deployment
+
+Parameters:
+  ImageUri:
+    Type: String
+    Description: ECR image URI (e.g., 123456789012.dkr.ecr.us-east-1.amazonaws.com/ops-agent:latest)
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: VPC to deploy into
+  SubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+    Description: At least 2 public subnets in different AZs
+  AWSProfile:
+    Type: String
+    Default: ''
+    Description: AWS CLI profile name for the agent to use (leave empty for IAM role)
+  ApiKey:
+    Type: String
+    Default: ''
+    NoEcho: true
+    Description: API key for dashboard auth (leave empty to auto-generate)
+  BedrockModelId:
+    Type: String
+    Default: us.anthropic.claude-haiku-4-5-20251001-v1:0
+    Description: Bedrock model ID for chat assistant
+
+Resources:
+  # --- Security Groups ---
+  ALBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: ALB - allow HTTP from anywhere
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+
+  ECSSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: ECS tasks - allow traffic from ALB only
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 8080
+          ToPort: 8080
+          SourceSecurityGroupId: !Ref ALBSecurityGroup
+
+  # --- ALB ---
+  ALB:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: ops-agent-alb
+      Scheme: internet-facing
+      Type: application
+      Subnets: !Ref SubnetIds
+      SecurityGroups:
+        - !Ref ALBSecurityGroup
+
+  ALBTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: ops-agent-tg
+      Port: 8080
+      Protocol: HTTP
+      VpcId: !Ref VpcId
+      TargetType: ip
+      HealthCheckPath: /api/health
+      HealthCheckIntervalSeconds: 30
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 3
+      Matcher:
+        HttpCode: '200'
+
+  ALBListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref ALB
+      Port: 80
+      Protocol: HTTP
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref ALBTargetGroup
+
+  # --- ECS ---
+  ECSCluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: ops-agent-cluster
+
+  TaskExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: ops-agent-execution-role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+
+  TaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: ops-agent-task-role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: ops-agent-scanning
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              # Read-only scanning permissions
+              - Effect: Allow
+                Action:
+                  - ec2:Describe*
+                  - rds:Describe*
+                  - rds:ListTagsForResource
+                  - s3:ListAllMyBuckets
+                  - s3:GetBucketAcl
+                  - s3:GetBucketTagging
+                  - s3:GetPublicAccessBlock
+                  - lambda:ListFunctions
+                  - lambda:ListTags
+                  - lambda:GetFunction
+                  - ecs:List*
+                  - ecs:Describe*
+                  - elasticloadbalancing:Describe*
+                  - iam:ListUsers
+                  - iam:ListAccessKeys
+                  - iam:GetUser
+                  - cloudwatch:GetMetricStatistics
+                  - cloudwatch:DescribeAlarms
+                  - cloudtrail:LookupEvents
+                  - config:Describe*
+                  - config:List*
+                  - config:GetResourceConfigHistory
+                  - guardduty:ListDetectors
+                  - guardduty:ListFindings
+                  - guardduty:GetFindings
+                  - securityhub:GetFindings
+                  - health:Describe*
+                  - support:DescribeTrustedAdvisor*
+                  - ce:GetCostAndUsage
+                  - ce:GetAnomalies
+                  - service-quotas:GetServiceQuota
+                  - service-quotas:ListServiceQuotas
+                  - organizations:List*
+                  - organizations:Describe*
+                  - sts:GetCallerIdentity
+                  - sts:AssumeRole
+                  - tag:GetResources
+                Resource: '*'
+              # Bedrock for chat + arch diagrams
+              - Effect: Allow
+                Action:
+                  - bedrock:InvokeModel
+                Resource: '*'
+              # Remediation write permissions (scoped)
+              - Effect: Allow
+                Action:
+                  - ec2:DeleteVolume
+                  - ec2:ReleaseAddress
+                  - ec2:DeleteNatGateway
+                  - ec2:StopInstances
+                  - ec2:RevokeSecurityGroupIngress
+                  - ec2:CreateTags
+                  - ec2:CreateFlowLogs
+                  - ec2:CancelCapacityReservation
+                  - rds:StopDBInstance
+                  - rds:ModifyDBInstance
+                  - rds:AddTagsToResource
+                  - s3:PutPublicAccessBlock
+                  - s3:PutBucketTagging
+                  - iam:UpdateAccessKey
+                  - lambda:UpdateFunctionConfiguration
+                  - lambda:TagResource
+                Resource: '*'
+
+  LogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /ecs/ops-agent
+      RetentionInDays: 30
+
+  TaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: ops-agent
+      Cpu: '512'
+      Memory: '1024'
+      NetworkMode: awsvpc
+      RequiresCompatibilities:
+        - FARGATE
+      ExecutionRoleArn: !GetAtt TaskExecutionRole.Arn
+      TaskRoleArn: !GetAtt TaskRole.Arn
+      ContainerDefinitions:
+        - Name: ops-agent
+          Image: !Ref ImageUri
+          PortMappings:
+            - ContainerPort: 8080
+          Environment:
+            - Name: OPS_AGENT_API_KEY
+              Value: !Ref ApiKey
+            - Name: OPS_AGENT_BEDROCK_MODEL
+              Value: !Ref BedrockModelId
+            - Name: OPS_AGENT_CORS_ORIGINS
+              Value: !Sub 'http://${ALB.DNSName}'
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref LogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: ops-agent
+          HealthCheck:
+            Command:
+              - CMD-SHELL
+              - 'curl -f http://localhost:8080/api/health || exit 1'
+            Interval: 30
+            Timeout: 5
+            Retries: 3
+
+  ECSService:
+    Type: AWS::ECS::Service
+    DependsOn: ALBListener
+    Properties:
+      ServiceName: ops-agent
+      Cluster: !Ref ECSCluster
+      TaskDefinition: !Ref TaskDefinition
+      DesiredCount: 1
+      LaunchType: FARGATE
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: ENABLED
+          Subnets: !Ref SubnetIds
+          SecurityGroups:
+            - !Ref ECSSecurityGroup
+      LoadBalancers:
+        - ContainerName: ops-agent
+          ContainerPort: 8080
+          TargetGroupArn: !Ref ALBTargetGroup
+
+Outputs:
+  DashboardURL:
+    Description: Dashboard URL
+    Value: !Sub 'http://${ALB.DNSName}'
+  ALBDNSName:
+    Description: ALB DNS name
+    Value: !GetAtt ALB.DNSName
+  ClusterName:
+    Description: ECS Cluster
+    Value: !Ref ECSCluster

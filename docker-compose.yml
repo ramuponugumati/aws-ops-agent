@@ -1,0 +1,19 @@
+version: '3.8'
+
+services:
+  ops-agent:
+    build: .
+    ports:
+      - "8080:8080"
+    volumes:
+      - ~/.aws:/root/.aws:ro
+    environment:
+      - AWS_PROFILE=${AWS_PROFILE:-default}
+      - OPS_AGENT_BEDROCK_MODEL=${OPS_AGENT_BEDROCK_MODEL:-us.anthropic.claude-haiku-4-5-20251001-v1:0}
+      - OPS_AGENT_BEDROCK_REGION=${OPS_AGENT_BEDROCK_REGION:-us-east-1}
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3

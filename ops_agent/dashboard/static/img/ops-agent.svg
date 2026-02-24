@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+  <!-- Gear outer -->
+  <path d="M32 8l4.5 2.5L42 9l2 5.5 5.5 2-1.5 5.5L51 27l-3 4.5L51 37l-3 4.5 1.5 5.5-5.5 2-2 5.5-5.5-1.5L32 56l-4.5-2.5L22 55l-2-5.5-5.5-2 1.5-5.5L13 37l3-4.5L13 27l3-4.5-1.5-5.5 5.5-2 2-5.5 5.5 1.5z" fill="#4f46e5" opacity="0.15" stroke="#4f46e5" stroke-width="1.5"/>
+  <!-- Gear inner circle -->
+  <circle cx="32" cy="32" r="12" fill="white" stroke="#4f46e5" stroke-width="2"/>
+  <!-- Wrench -->
+  <path d="M28 28l-8 8c-1.5 1.5-1.5 4 0 5.5s4 1.5 5.5 0l8-8" stroke="#4f46e5" stroke-width="2.5" stroke-linecap="round" fill="none"/>
+  <!-- Lightning bolt -->
+  <path d="M35 22l-3 7h5l-3 7" stroke="#f59e0b" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+  <!-- Pulse line -->
+  <path d="M22 32h4l2-4 3 8 2-4h4" stroke="#4f46e5" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+</svg>
