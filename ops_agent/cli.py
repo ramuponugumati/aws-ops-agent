@@ -396,5 +396,45 @@ def dashboard(ctx, host, port, api_key):
     uvicorn.run(app, host=host, port=port)
 
 
+@cli.command("mcp")
+@click.option("--transport", default="stdio", type=click.Choice(["stdio", "sse"]), help="MCP transport")
+@click.option("--host", default="127.0.0.1", help="SSE host (only for sse transport)")
+@click.option("--port", default=8081, type=int, help="SSE port (only for sse transport)")
+@click.pass_context
+def mcp_server(ctx, transport, host, port):
+    """Start the MCP server (exposes skills as tools)"""
+    import logging
+    logging.getLogger("fastmcp").setLevel(logging.ERROR)
+    from ops_agent.mcp_server import mcp
+
+    profile = ctx.obj["profile"]
+    if profile:
+        os.environ["AWS_PROFILE"] = profile
+
+    if transport == "stdio":
+        console.print("[cyan]Starting AWS Ops Agent MCP server (stdio)...[/cyan]")
+        mcp.run(transport="stdio")
+    else:
+        console.print(Panel(
+            f"[bold cyan]⚡🔧 AWS Ops Agent MCP Server[/bold cyan]\n"
+            f"[dim]http://{host}:{port}/sse | Profile: {profile or 'default'}[/dim]\n"
+            f"[dim]16 tools | 12 skills | Bedrock AgentCore compatible[/dim]\n"
+            f"[dim]Docs: https://docs.aws.amazon.com/bedrock-agentcore/[/dim]",
+            box=box.DOUBLE, style="cyan"
+        ))
+        mcp.run(transport="sse", host=host, port=port)
+
+
+@cli.command("agent")
+@click.option("--region", default="us-east-1", help="Bedrock region")
+@click.option("--model", default=None, help="Bedrock model ID (e.g., us.anthropic.claude-sonnet-4-20250514-v1:0)")
+@click.pass_context
+def strands_agent(ctx, region, model):
+    """Start interactive Strands agent (chat with MCP tools)"""
+    from ops_agent.strands_agent import run_interactive
+    profile = ctx.obj["profile"]
+    run_interactive(profile=profile, region=region, model_id=model)
+
+
 if __name__ == "__main__":
     cli()

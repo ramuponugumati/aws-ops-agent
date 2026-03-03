@@ -22,6 +22,14 @@ setup(
             "httpx>=0.24",
             "pytest-asyncio>=0.21",
         ],
+        "mcp": [
+            "fastmcp>=2.0.0",
+        ],
+        "agent": [
+            "fastmcp>=2.0.0",
+            "strands-agents>=1.0.0",
+            "strands-agents-tools>=0.2.0",
+        ],
     },
     entry_points={"console_scripts": ["ops-agent=ops_agent.cli:cli"]},
     python_requires=">=3.9",
