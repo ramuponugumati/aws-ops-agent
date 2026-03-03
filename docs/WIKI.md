@@ -1,395 +1,452 @@
-# AWS Ops Agent — Complete Guide
+# AWS Ops Agent — Internal Wiki
 
-## What Is It?
+## Overview
 
-AWS Ops Agent is like having a cloud operations expert watching your AWS account 24/7. It automatically scans your entire AWS environment — every region, every service — and tells you exactly what needs attention: where you're wasting money, where your security has gaps, where your infrastructure is fragile, and what's about to break.
+AWS Ops Agent is an autonomous cloud operations platform that scans AWS environments for cost waste, security risks, resiliency gaps, deprecated resources, and operational issues. It provides a web dashboard with real-time findings, one-click remediation, an AI chat assistant, and org-wide scanning across all accounts.
 
-Think of it as a health checkup for your AWS account. You press one button, and within a minute you get a complete picture of your cloud health across cost, security, compliance, resiliency, and operations.
-
-It also fixes things. Found an orphaned EBS volume burning $8/month? One click to delete it. Open security group exposing port 22 to the internet? One click to lock it down. Missing tags on your resources? One click to apply them. 18 common issues can be fixed without leaving the dashboard.
-
-And if you're not sure what to do, there's an AI chat assistant built in. It knows your scan results and can walk you through what to prioritize, explain what a finding means in plain English, and guide you through fixing things step by step.
-
----
-
-## Architecture
-
-The system has four deployment modes, from simplest to most enterprise-ready:
-
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│                     HOW CUSTOMERS USE IT                            │
-│                                                                     │
-│  Mode 1: Web Dashboard (localhost or ECS Fargate)                  │
-│  ┌──────────┐     ┌──────────────────────────────────────────┐     │
-│  │ Browser  │────▶│ FastAPI Server (:8080)                    │     │
-│  └──────────┘     │  ├── 12 Scanning Skills (parallel)       │     │
-│                   │  ├── 18 Fix It Remediations               │     │
-│                   │  ├── AI Chat (Bedrock Claude)             │     │
-│                   │  └── Security Middleware                   │     │
-│                   └──────────────────────────────────────────┘     │
-│                                                                     │
-│  Mode 2: MCP Server (for Kiro, Claude Desktop, Q Developer)       │
-│  ┌──────────┐     ┌──────────────────────────────────────────┐     │
-│  │ MCP      │────▶│ FastMCP Server (stdio/SSE)                │     │
-│  │ Client   │     │  └── 16 Tools (12 scans + remediate +    │     │
-│  └──────────┘     │       list_skills + get_account_info +    │     │
-│                   │       scan_all)                            │     │
-│                   └──────────────────────────────────────────┘     │
-│                                                                     │
-│  Mode 3: Strands Agent (interactive CLI)                           │
-│  ┌──────────┐     ┌──────────────────────────────────────────┐     │
-│  │ Terminal │────▶│ Strands Agent                              │     │
-│  │ (chat)   │     │  ├── Bedrock Claude (reasoning)           │     │
-│  └──────────┘     │  └── MCP Server (subprocess)              │     │
-│                   │       └── 16 Tools                         │     │
-│                   └──────────────────────────────────────────┘     │
-│                                                                     │
-│  Mode 4: Bedrock AgentCore (managed, production)                   │
-│  ┌──────────┐     ┌──────────┐     ┌─────────────────────────┐    │
-│  │ App/API  │────▶│ AgentCore│────▶│ Strands Agent Container  │    │
-│  │          │     │ Gateway  │     │  ├── Bedrock Claude       │    │
-│  └──────────┘     └──────────┘     │  └── MCP Server + Skills  │    │
-│                                    └─────────────────────────┘    │
-└─────────────────────────────────────────────────────────────────────┘
-
-All modes use the same 12 skills scanning the same AWS services:
-
-┌─────────────────────────────────────────────────────────────────────┐
-│                     AWS SERVICES SCANNED                            │
-│                                                                     │
-│  Compute: EC2, Lambda, ECS, SageMaker                              │
-│  Database: RDS, DynamoDB                                            │
-│  Storage: S3, EBS                                                   │
-│  Network: VPC, ELB, NAT Gateway, CloudFront, API Gateway           │
-│  Security: GuardDuty, Security Hub, IAM                            │
-│  Operations: CloudWatch, CloudTrail, AWS Config, Health             │
-│  Cost: Cost Explorer, Service Quotas, Trusted Advisor              │
-│  Messaging: SQS, SNS                                               │
-└─────────────────────────────────────────────────────────────────────┘
-```
+**Author:** Ramu Ponu
+**Version:** 0.3.0
+**Repository:** `aws-ops-agent/`
 
 ---
 
 ## Tech Stack
 
-| Layer | Technology | Why |
-|-------|-----------|-----|
-| Language | Python 3.10+ | Universal, great AWS SDK support |
-| Web Framework | FastAPI | Async, fast, auto-docs |
-| AI Model | Amazon Bedrock (Claude Haiku 4.5) | Low latency, cost-effective, tool-use support |
-| Agent Framework | Strands Agents SDK | AWS-native, MCP integration, Bedrock-optimized |
-| MCP Server | FastMCP | Simple tool registration, stdio + SSE transport |
-| AWS SDK | Boto3 | Official AWS Python SDK |
-| CLI | Click + Rich | Beautiful terminal output |
-| Frontend | Vanilla JS + CSS | Zero build step, no npm needed |
-| Diagrams | Mermaid.js | Architecture visualization in browser |
-| Testing | Pytest (359 tests) | Full coverage, all mocked |
-| Container | Docker (Python 3.12-slim) | Lightweight, production-ready |
-| Deployment | CloudFormation / AgentCore | One-command deploy |
+| Component | Technology | Version |
+|-----------|-----------|---------|
+| Language | Python | 3.9+ |
+| Web Framework | FastAPI | 0.100+ |
+| ASGI Server | Uvicorn | 0.23+ |
+| CLI Framework | Click | 8.0+ |
+| CLI Rendering | Rich | 13.0+ |
+| AWS SDK | Boto3 | 1.28+ |
+| AI/Chat | Amazon Bedrock (Claude Haiku 4.5) | - |
+| Scheduling | APScheduler | 3.10+ |
+| HTTP Client | Requests | 2.28+ |
+| Frontend | Vanilla JS + HTML + CSS | - |
+| Diagramming | Mermaid.js (CDN) | 11.x |
+| Testing | Pytest + Hypothesis + HTTPX | - |
+| Container | Docker (Python 3.12-slim) | - |
+| Infrastructure | CloudFormation (ECS Fargate + ALB) | - |
 
 ---
 
-## The 12 Skills — What They Do and Why They Matter
+## Architecture
 
-### 💰 Cost-Anomaly
-**What it does:** Compares this week's spending to last week, service by service. Flags any service with a 25%+ increase. Also checks AWS Cost Anomaly Detection for flagged anomalies and spots new services that appeared this month but weren't used last month.
-
-**Why it matters:** Cost spikes often go unnoticed until the monthly bill arrives. A runaway test environment, an accidentally launched large instance, or a new service someone forgot about can add thousands to your bill. This skill catches it within days, not weeks.
-
-**Example finding:** "Amazon SageMaker: +67% week-over-week — Last week: $1,200 | This week (projected): $2,004 | Change: +$804/week"
-
----
-
-### 🧟 Zombie-Hunter
-**What it does:** Finds resources that exist but aren't doing anything useful — unattached EBS volumes (no instance connected), unused Elastic IPs (not assigned to anything), NAT Gateways with zero traffic in 7 days, EC2 instances with less than 2% CPU over a week, and RDS databases with zero connections.
-
-**Why it matters:** Gartner estimates 25% of cloud resources are idle or orphaned at any given time. These "zombie" resources silently burn money every hour. A single forgotten NAT Gateway costs $32/month. An idle m5.xlarge costs $140/month. Across an organization with dozens of accounts, this adds up to tens of thousands per year.
-
-**Example finding:** "Idle EC2: i-0abc123def456 — t3.large | CPU: 0.5% | $73/mo"
-
-**Fix It:** Stop the instance with one click.
-
----
-
-### 🛡️ Security-Posture
-**What it does:** Pulls active GuardDuty findings (severity 4+), checks Security Hub for failed compliance controls (CIS, AWS Foundational), finds security groups open to 0.0.0.0/0 on dangerous ports (SSH 22, RDP 3389, MySQL 3306, Postgres 5432, MongoDB 27017), checks for S3 buckets with public ACLs, and flags IAM access keys older than 90 days.
-
-**Why it matters:** IBM Security reports the average cost of a data breach reached $4.88M in 2024. Most breaches start with a misconfiguration — an open port, a public bucket, a stale access key. This skill surfaces those misconfigurations before they become incidents.
-
-**Example finding:** "Open port 22 to 0.0.0.0/0: sg-0abc123 — SG 'default' allows inbound on port 22 from anywhere"
-
-**Fix It:** Revoke the 0.0.0.0/0 rule with one click.
-
----
-
-### 📊 Capacity-Planner
-**What it does:** Checks EC2 on-demand instance quotas approaching their limits, finds On-Demand Capacity Reservations (ODCRs) that are underutilized (paying for capacity you're not using), and monitors SageMaker endpoints at max scaling capacity.
-
-**Why it matters:** Service quota limits are one of the most common causes of unexpected production outages during scaling events. You try to launch instances during a traffic spike and hit a limit nobody knew about. This skill warns you before that happens.
-
-**Example finding:** "Underutilized ODCR: cr-0abc123 — p4d.24xlarge | 2/10 used (20%) | 8 idle | $191,000/mo waste"
-
----
-
-### 🔍 Event-Analysis
-**What it does:** Scans CloudTrail for high-risk events in the last 24 hours — things like DeleteSecurityGroup, TerminateInstances, PutBucketPolicy, DeleteDBInstance. Flags root account usage (which should never happen in daily operations). Counts unauthorized API calls (AccessDenied errors) which may indicate misconfiguration or compromise. Checks AWS Config for non-compliant rules.
-
-**Why it matters:** Early detection of anomalous activity is critical for security incident response. If someone deletes a security group or terminates instances, you want to know immediately — not when a customer reports an outage.
-
-**Example finding:** "Root account activity: ConsoleLogin — Root account used at 2025-02-24T03:15:00Z"
-
----
-
-### 🏗️ Resiliency-Gaps
-**What it does:** Checks all 6 Well-Architected Framework pillars:
-- **Reliability:** Single-AZ RDS (no failover), single-AZ load balancers, RDS with no backups, ASGs that can't scale (min=max)
-- **Security:** Unencrypted EBS volumes, unencrypted RDS, VPCs without flow logs
-- **Performance:** Old-generation instances (m4, c3, t2) that should be upgraded
-- **Operational Excellence:** EC2 instances with no CloudWatch alarms, resources missing standard tags
-- **Sustainability:** x86 instances eligible for Graviton migration (20% cost savings + better energy efficiency), oversized instances with <10% CPU
-
-**Why it matters:** The Well-Architected Framework identifies single points of failure as the top reliability risk. A single-AZ RDS instance means one AZ outage takes down your database. No backups means one accidental delete loses everything. This skill finds those gaps before they cause incidents.
-
-**Example finding:** "Single-AZ RDS: my-production-db — db.r5.large | postgres | No Multi-AZ failover"
-
-**Fix It:** Enable Multi-AZ with one click.
+```
+┌─────────────────────────────────────────────────────────────┐
+│                        Browser / CLI                         │
+└──────────────────────────┬──────────────────────────────────┘
+                           │ HTTP
+┌──────────────────────────▼──────────────────────────────────┐
+│                    FastAPI Server (:8080)                     │
+│  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌───────────────┐  │
+│  │ Security  │ │   Rate   │ │  CORS    │ │  API Key Auth │  │
+│  │ Headers   │ │ Limiter  │ │ Lockdown │ │  Middleware    │  │
+│  └──────────┘ └──────────┘ └──────────┘ └───────────────┘  │
+│                                                              │
+│  API Endpoints:                                              │
+│  ├── GET  /api/health          Health check                  │
+│  ├── GET  /api/skills          List 12 skills                │
+│  ├── POST /api/scan/{skill}    Run single skill              │
+│  ├── POST /api/scan-all        Run all skills in parallel    │
+│  ├── POST /api/org-scan        Org-wide cross-account scan   │
+│  ├── POST /api/remediate       Execute Fix It action         │
+│  ├── POST /api/chat            AI chat (Bedrock Claude)      │
+│  ├── GET  /api/jobs/{id}       Job status                    │
+│  └── GET  /api/jobs/{id}/results  Scan results               │
+│                                                              │
+│  ┌────────────────────────────────────────────────────────┐  │
+│  │              12 Scanning Skills (Parallel)              │  │
+│  │  💰 Cost-Anomaly    🧟 Zombie-Hunter   🛡️ Security     │  │
+│  │  📊 Capacity        🔍 Event-Analysis  🏗️ Resiliency   │  │
+│  │  🏷️ Tag-Enforcer    ⏳ Lifecycle       🏥 Health        │  │
+│  │  📏 Quota-Guardian  🏗️ Arch-Diagram   🎯 CostOpt-Intel │  │
+│  └────────────────────────────────────────────────────────┘  │
+│                                                              │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────────┐  │
+│  │ Remediation  │  │ Chat Handler │  │   Job Store      │  │
+│  │ 18 Fix Its   │  │ + Guardrails │  │   (In-Memory)    │  │
+│  └──────────────┘  └──────┬───────┘  └──────────────────┘  │
+└──────────────────────────┬┼─────────────────────────────────┘
+                           ││
+              ┌────────────▼┼────────────────┐
+              │      Amazon Bedrock          │
+              │   Claude Haiku 4.5           │
+              │   (Chat + Arch Diagrams)     │
+              └──────────────────────────────┘
+              
+              ┌──────────────────────────────┐
+              │     AWS Services Scanned     │
+              │  EC2, RDS, S3, Lambda, ECS,  │
+              │  VPC, IAM, CloudWatch,       │
+              │  CloudTrail, Config,         │
+              │  GuardDuty, Security Hub,    │
+              │  Health, Trusted Advisor,    │
+              │  Service Quotas, Cost        │
+              │  Explorer, DynamoDB, SQS,    │
+              │  SNS, API Gateway,           │
+              │  CloudFront                  │
+              └──────────────────────────────┘
+```
 
 ---
 
-### 🏷️ Tag-Enforcer
-**What it does:** Scans EC2 instances, RDS databases, S3 buckets, and Lambda functions for three mandatory tags: Environment, Team, and Owner. Reports which resources are missing which tags.
+## Project Structure
 
-**Why it matters:** AWS Well-Architected Framework recommends mandatory tagging as a foundation for cost allocation and operational governance. Without tags, you can't answer "which team owns this resource?" or "how much does the production environment cost?" Organizations with consistent tagging report 40% faster incident response times.
-
-**Example finding:** "Untagged EC2: i-0abc123 — t3.micro | web-server | Missing: Environment, Team"
-
-**Fix It:** Apply default tags with one click.
+```
+aws-ops-agent/
+├── ops_agent/
+│   ├── __init__.py
+│   ├── core.py                 # Finding, SkillResult, SkillRegistry, BaseSkill
+│   ├── cli.py                  # Click CLI: run, dashboard, org-scan, skills
+│   ├── aws_client.py           # Boto3 helpers, parallel_regions, org tree
+│   ├── notify.py               # Slack, SNS, console notifications
+│   ├── skills/
+│   │   ├── __init__.py         # Auto-registers all 12 skills
+│   │   ├── cost_anomaly.py     # Week-over-week, anomaly detection, new services
+│   │   ├── zombie_hunter.py    # Idle EC2/RDS, unattached EBS, unused EIP/NAT
+│   │   ├── security_posture.py # GuardDuty, Security Hub, open SGs, public S3, IAM
+│   │   ├── capacity_planner.py # EC2 quotas, ODCR utilization, SageMaker capacity
+│   │   ├── event_analysis.py   # CloudTrail high-risk events, root usage, Config
+│   │   ├── resiliency_gaps.py  # All 6 WAF pillars (12 checks)
+│   │   ├── tag_enforcer.py     # Untagged EC2, RDS, S3, Lambda
+│   │   ├── lifecycle_tracker.py# Deprecated runtimes, EOL engines, old Fargate
+│   │   ├── health_monitor.py   # AWS Health events, Trusted Advisor
+│   │   ├── quota_guardian.py   # Service quotas approaching limits
+│   │   ├── arch_diagram.py     # Resource discovery + Bedrock Mermaid diagrams
+│   │   └── costopt_intelligence.py # SP/RI recs, right-sizing, EBS/S3 optimization
+│   └── dashboard/
+│       ├── server.py           # FastAPI app with security middleware
+│       ├── chat.py             # Bedrock Claude integration + guardrails
+│       ├── guardrails.py       # Prompt injection, topic boundaries, output sanitization
+│       ├── security.py         # API key auth, rate limiting, security headers, audit
+│       ├── remediation.py      # 18 Fix It handlers
+│       ├── jobs.py             # In-memory job store
+│       └── static/
+│           ├── index.html
+│           ├── css/styles.css
+│           ├── js/api.js, app.js, components.js
+│           └── img/ops-agent.svg, costopt-intelligence.svg
+├── tests/                      # 359 unit tests
+│   ├── conftest.py
+│   ├── test_core.py
+│   ├── test_aws_client.py
+│   ├── test_chat.py
+│   ├── test_guardrails.py
+│   ├── test_security.py
+│   ├── test_server.py
+│   ├── test_jobs.py
+│   ├── test_notify.py
+│   ├── test_remediation.py
+│   ├── test_skill_registration.py
+│   └── test_skill_*.py         # One per skill
+├── deploy/
+│   ├── deploy.sh               # One-click ECS Fargate deployment
+│   └── cloudformation.yaml     # Full CFN template
+├── Dockerfile
+├── docker-compose.yml
+├── setup.py
+├── SECURITY_REVIEW.md
+└── README.md
+```
 
 ---
 
-### ⏳ Lifecycle-Tracker
-**What it does:** Flags Lambda functions running deprecated runtimes (Python 3.7, Node.js 16, Go 1.x, etc.), RDS databases on end-of-life engine versions (MySQL 5.7, PostgreSQL 11-13), and ECS Fargate services on old platform versions.
+## Skills Reference
 
-**Why it matters:** AWS deprecates runtimes on a regular cycle, and running unsupported versions means no security patches. A Lambda function on Python 3.7 (EOL December 2023) has over a year of unpatched vulnerabilities. This is a compliance risk that auditors will flag.
-
-**Example finding:** "Deprecated runtime: my-function — python3.7 (EOL: 2023-12-04) — upgrade to python3.12"
-
-**Fix It:** Upgrade the runtime with one click.
-
----
-
-### 🏥 Health-Monitor
-**What it does:** Pulls AWS Health events (service issues, scheduled maintenance, account notifications) from the last 7 days. Also checks Trusted Advisor for warnings and errors across cost, security, reliability, and performance categories.
-
-**Why it matters:** AWS Health events provide advance notice of maintenance and service issues. Proactive monitoring can reduce mean-time-to-resolution by up to 60%. If AWS is doing maintenance on your RDS instance next Tuesday, you want to know now — not when it goes down.
-
-**Example finding:** "⚠ Service issue: EC2 (open) — EC2 connectivity issues in us-east-1"
-
----
-
-### 📏 Quota-Guardian
-**What it does:** Monitors 12 key service quotas: EC2 on-demand instances, Elastic IPs, VPCs, Internet Gateways, NAT Gateways, ALBs, Lambda concurrent executions, RDS instances, S3 buckets, EBS storage, ECS clusters, and CloudFormation stacks. Alerts when usage exceeds 70% of the limit.
-
-**Why it matters:** Hitting a service quota during a scaling event causes an outage that's hard to diagnose. "Why can't I launch more instances?" — because you hit your vCPU limit. This skill warns you before you hit the wall.
-
-**Example finding:** "Quota 85%: Running On-Demand Standard instances — ec2 | Limit: 256 | Usage: 85%"
+| # | Skill | Icon | What It Scans | AWS APIs Used |
+|---|-------|------|---------------|---------------|
+| 1 | cost-anomaly | 💰 | Spending spikes, week-over-week changes, new services | Cost Explorer, Cost Anomaly Detection |
+| 2 | zombie-hunter | 🧟 | Idle EC2/RDS, unattached EBS, unused EIPs/NATs | EC2, RDS, CloudWatch |
+| 3 | security-posture | 🛡️ | GuardDuty findings, Security Hub controls, open SGs, public S3, old IAM keys | GuardDuty, Security Hub, EC2, S3, IAM |
+| 4 | capacity-planner | 📊 | EC2 quotas, ODCR utilization, SageMaker capacity | Service Quotas, EC2, SageMaker |
+| 5 | event-analysis | 🔍 | High-risk CloudTrail events, root usage, unauthorized calls, Config compliance | CloudTrail, Config |
+| 6 | resiliency-gaps | 🏗️ | All 6 WAF pillars: reliability, security, performance, ops, sustainability | EC2, RDS, ELB, VPC, CloudWatch, ASG |
+| 7 | tag-enforcer | 🏷️ | Untagged EC2, RDS, S3, Lambda (mandatory: Environment, Team, Owner) | EC2, RDS, S3, Lambda |
+| 8 | lifecycle-tracker | ⏳ | Deprecated Lambda runtimes, EOL RDS engines, old Fargate platforms | Lambda, RDS, ECS |
+| 9 | health-monitor | 🏥 | AWS Health events, Trusted Advisor checks | Health, Support |
+| 10 | quota-guardian | 📏 | 12 key service quotas approaching limits | Service Quotas, CloudWatch |
+| 11 | arch-diagram | 🏗️ | Full resource discovery + Mermaid architecture diagram via Bedrock | Config, CloudTrail, EC2, RDS, Lambda, ECS, VPC, S3, DynamoDB, SQS, SNS, API GW, CloudFront |
+| 12 | costopt-intelligence | 🎯 | Savings Plan/RI recommendations, right-sizing, GP2→GP3, S3 tiering, NAT data costs, expiring commitments | Cost Explorer, EC2, CloudWatch, S3 |
 
 ---
 
-### 🏗️ Arch-Diagram
-**What it does:** Discovers every resource in your account — EC2, RDS, Lambda, ECS, ELB, VPC, S3, API Gateway, DynamoDB, SQS, SNS, CloudFront — using both direct API calls and AWS Config relationships. Then sends that data to Amazon Bedrock (Claude) to generate a visual Mermaid architecture diagram showing how resources connect.
+## One-Click Remediation (18 Actions)
 
-**Why it matters:** Understanding your full resource footprint is the first step to optimizing architecture. Most teams don't have an up-to-date architecture diagram. This skill generates one automatically from what's actually deployed — no manual drawing required.
-
----
-
-### 🎯 CostOpt-Intelligence
-**What it does:** Seven cost optimization checks:
-1. **Savings Plan recommendations** — Compute SP vs EC2 Instance SP, 1-year vs 3-year, with projected monthly savings
-2. **RI utilization & coverage** — Flags underutilized Reserved Instances and coverage gaps
-3. **Right-sizing** — EC2 instances with <20% avg CPU and <50% max CPU over 14 days, with specific downsize recommendations
-4. **EBS GP2→GP3 migration** — GP2 volumes that save 20% by switching to GP3 (no downtime, online migration)
-5. **S3 Intelligent-Tiering** — Large Standard buckets that could save up to 40% on infrequently accessed data
-6. **NAT Gateway data costs** — High-traffic NATs where VPC endpoints for S3/DynamoDB could reduce costs
-7. **Expiring commitments** — Savings Plans and RIs expiring within 60 days
-
-**Why it matters:** Flexera's 2024 State of the Cloud report estimates organizations waste 28% of their cloud spend. This skill tells you exactly where to optimize and how much you'll save — not just "you're spending too much" but "switch this instance from m5.4xlarge to m5.2xlarge and save $248/month."
-
-**Example finding:** "SP opportunity: Compute SP (1-year) — save $1,200/mo | Commit $1.65/hr | Savings: 32%"
+| Finding | Action | AWS API Call |
+|---------|--------|-------------|
+| Unattached EBS | Delete volume | `ec2:DeleteVolume` |
+| Unused EIP | Release address | `ec2:ReleaseAddress` |
+| Unused NAT GW | Delete NAT | `ec2:DeleteNatGateway` |
+| Idle EC2 | Stop instance | `ec2:StopInstances` |
+| Idle RDS | Stop instance | `rds:StopDBInstance` |
+| Open port 0.0.0.0/0 | Revoke SG rule | `ec2:RevokeSecurityGroupIngress` |
+| Public S3 bucket | Block public access | `s3:PutPublicAccessBlock` |
+| Old IAM key | Deactivate key | `iam:UpdateAccessKey` |
+| Single-AZ RDS | Enable Multi-AZ | `rds:ModifyDBInstance` |
+| No RDS backups | Enable 7-day retention | `rds:ModifyDBInstance` |
+| No VPC Flow Logs | Enable flow logs | `ec2:CreateFlowLogs` |
+| Underutilized ODCR | Cancel reservation | `ec2:CancelCapacityReservation` |
+| Untagged EC2 | Apply tags | `ec2:CreateTags` |
+| Untagged RDS | Apply tags | `rds:AddTagsToResource` |
+| Untagged S3 | Apply tags | `s3:PutBucketTagging` |
+| Untagged Lambda | Apply tags | `lambda:TagResource` |
+| Deprecated runtime | Upgrade runtime | `lambda:UpdateFunctionConfiguration` |
+| EOL RDS engine | Schedule upgrade | `rds:ModifyDBInstance` |
 
 ---
 
 ## Security Features
 
-The dashboard includes multiple security layers:
-
-- **API Key Authentication** — Required for non-localhost deployments
-- **CORS Lockdown** — Restricted to localhost by default
-- **Rate Limiting** — 60 requests/minute per IP with burst protection
-- **Security Headers** — CSP, X-Frame-Options DENY, X-Content-Type-Options nosniff
-- **Chat Guardrails** — Blocks prompt injection (12 patterns), topic boundary violations (6 patterns), and scrubs output for leaked system prompts or access keys
-- **Input Validation** — Chat messages capped at 4000 characters, control characters stripped
-- **Audit Logging** — Every remediation and chat request logged with timestamp and client IP
+| Layer | Feature | Detail |
+|-------|---------|--------|
+| Auth | API Key | `X-API-Key` header, auto-generated for non-localhost |
+| Network | CORS | Locked to localhost, configurable via `OPS_AGENT_CORS_ORIGINS` |
+| Rate Limit | Per-IP | 60 req/min, burst protection (15/5sec) |
+| Headers | CSP, X-Frame-Options | DENY framing, strict CSP, nosniff, referrer policy |
+| Chat Input | Sanitization | 4000 char limit, control char stripping |
+| Chat Input | Guardrails | Prompt injection detection (12 patterns), topic boundaries (6 patterns) |
+| Chat Output | Sanitization | System prompt leak scrubbing, access key redaction |
+| Audit | Logging | All remediations + chat requests logged to `ops_agent_audit.log` |
 
 ---
 
-## Step-by-Step Installation Guide
+## Prerequisites
 
-### Option A: Run Locally (5 minutes)
+1. **Python 3.9+** — macOS: `brew install python@3.12` or use system Python
+2. **AWS CLI configured** — `aws configure --profile your-profile`
+3. **AWS permissions** — `ReadOnlyAccess` for scanning, specific write permissions for remediation (see IAM section below)
+4. **Amazon Bedrock access** — Enable Claude Haiku 4.5 model in the Bedrock console (us-east-1)
+5. **Docker** (optional) — For container deployment
 
-**Prerequisites:** Python 3.9+, AWS CLI configured
+---
+
+## Installation
+
+### Local Development
 
 ```bash
-# 1. Clone the repo
-git clone https://github.com/YOUR_ORG/aws-ops-agent.git
+# Clone the repo
+git clone <repo-url>
 cd aws-ops-agent
 
-# 2. Install
+# Install in editable mode
 python3 -m pip install -e .
 
-# 3. Launch the dashboard
+# Verify
+python3 -m ops_agent.cli skills
+```
+
+### Launch Dashboard
+
+```bash
+# Using the module directly (always works)
 python3 -m ops_agent.cli --profile your-profile dashboard
 
-# 4. Open http://127.0.0.1:8080 in your browser
-# 5. Click "Run All Skills" and wait ~60 seconds
+# Or if PATH includes pip bin directory
+ops-agent --profile your-profile dashboard
 ```
 
-### Option B: Docker (2 minutes)
+Opens http://127.0.0.1:8080
+
+### Docker
 
 ```bash
-git clone https://github.com/YOUR_ORG/aws-ops-agent.git
-cd aws-ops-agent
+# Build and run
+docker compose up
 
-# Run with your AWS credentials
-AWS_PROFILE=your-profile docker compose up
-
-# Open http://localhost:8080
+# Or manually
+docker build -t ops-agent .
+docker run -p 8080:8080 -v ~/.aws:/root/.aws:ro -e AWS_PROFILE=your-profile ops-agent
 ```
 
-### Option C: Deploy to AWS (ECS Fargate + ALB)
+### Deploy to AWS (ECS Fargate + ALB)
 
 ```bash
-git clone https://github.com/YOUR_ORG/aws-ops-agent.git
-cd aws-ops-agent
+# One command — creates ECR, builds image, deploys CFN stack
+./deploy/deploy.sh \
+  --vpc vpc-xxxxxxxx \
+  --subnets subnet-aaaa,subnet-bbbb \
+  --profile your-profile \
+  --region us-east-1
 
-# Find your VPC and subnets
-aws ec2 describe-vpcs --query 'Vpcs[].{Id:VpcId,Name:Tags[?Key==`Name`].Value|[0]}' --output table
-aws ec2 describe-subnets --filters Name=vpc-id,Values=YOUR_VPC \
-  --query 'Subnets[?MapPublicIpOnLaunch].{Id:SubnetId,AZ:AvailabilityZone}' --output table
-
-# Deploy (creates ECR, builds image, deploys CloudFormation)
-./deploy/deploy.sh --vpc vpc-xxx --subnets subnet-aaa,subnet-bbb --profile your-profile
-
-# You'll get a public URL back in ~3 minutes
-# To tear down: ./deploy/deploy.sh --destroy --profile your-profile
-```
-
-### Option D: Deploy to Bedrock AgentCore (production)
-
-```bash
-# 1. Install prerequisites
-pip install bedrock-agentcore-starter-toolkit
-
-# 2. Clone and install
-git clone https://github.com/YOUR_ORG/aws-ops-agent.git
-cd aws-ops-agent
-pip install -e ".[agent]"
-
-# 3. Configure AWS credentials
-export AWS_PROFILE=your-profile
-export AWS_REGION=us-east-1
-
-# 4. Deploy to AgentCore
-cd deploy/agentcore
-agentcore configure --entrypoint agent.py
-agentcore launch
-
-# 5. Test
-agentcore invoke '{"prompt": "Scan my account for security issues"}'
-agentcore invoke '{"prompt": "What are my cost optimization opportunities?"}'
-agentcore invoke '{"prompt": "Run all skills and give me a prioritized summary"}'
-```
-
-### Option E: Use as MCP Server (for Kiro, Claude Desktop, Q Developer)
-
-Add to your MCP client config:
-
-```json
-{
-  "mcpServers": {
-    "aws-ops-agent": {
-      "command": "python3",
-      "args": ["-m", "ops_agent.mcp_server"],
-      "env": { "AWS_PROFILE": "your-profile" }
-    }
-  }
-}
-```
-
-Then ask your AI assistant: "Scan my AWS account for zombie resources"
-
-### Option F: Interactive Strands Agent (CLI chat)
-
-```bash
-pip install -e ".[agent]"
-python3 -m ops_agent.cli --profile your-profile agent
-```
-
-Chat naturally:
-```
-You: What's the security posture of my account?
-You: Are there any idle resources wasting money?
-You: Fix the open port 22 on sg-abc123
-You: What Savings Plan should I buy?
+# Tear down
+./deploy/deploy.sh --destroy --profile your-profile --region us-east-1
 ```
 
 ---
 
-## AWS Permissions Required
+## How Others Can Access
 
-**For scanning (read-only):** The `ReadOnlyAccess` managed policy covers most skills. Key permissions: `ec2:Describe*`, `rds:Describe*`, `s3:List*`, `lambda:List*`, `cloudwatch:GetMetricStatistics`, `cloudtrail:LookupEvents`, `guardduty:GetFindings`, `securityhub:GetFindings`, `ce:GetCostAndUsage`, `bedrock:InvokeModel`.
+### Option 1: Run Locally (Individual Use)
 
-**For remediation (write):** `ec2:DeleteVolume`, `ec2:StopInstances`, `ec2:RevokeSecurityGroupIngress`, `rds:ModifyDBInstance`, `s3:PutPublicAccessBlock`, `iam:UpdateAccessKey`, `lambda:UpdateFunctionConfiguration`, and a few more.
+Each person clones the repo and runs locally with their own AWS profile:
 
-**For Bedrock chat:** `bedrock:InvokeModel` — enable Claude Haiku 4.5 in the Bedrock console.
+```bash
+git clone <repo-url>
+cd aws-ops-agent
+python3 -m pip install -e .
+python3 -m ops_agent.cli --profile their-profile dashboard
+```
+
+### Option 2: Shared Deployment (Team Use)
+
+Deploy once to ECS Fargate using the deploy script. The ALB gives a public URL that anyone on the network can access. The ECS task role provides the AWS permissions — no individual credentials needed.
+
+```
+Team member → Browser → ALB URL → ECS Fargate → AWS APIs
+```
+
+Share the ALB URL + API key with the team.
+
+### Option 3: Docker on a Shared Server
+
+Run the Docker container on a shared EC2 instance or dev server:
+
+```bash
+docker run -d -p 8080:8080 \
+  -e AWS_ACCESS_KEY_ID=AKIA... \
+  -e AWS_SECRET_ACCESS_KEY=... \
+  -e AWS_DEFAULT_REGION=us-east-1 \
+  ops-agent
+```
+
+Access at `http://<server-ip>:8080`
 
 ---
 
 ## Configuration
 
-All settings are via environment variables — no config files to manage:
-
-| Variable | Default | What It Does |
-|----------|---------|-------------|
-| `OPS_AGENT_API_KEY` | _(none)_ | API key for dashboard auth |
-| `OPS_AGENT_CORS_ORIGINS` | `localhost` | Allowed CORS origins |
+| Environment Variable | Default | Description |
+|---------------------|---------|-------------|
+| `OPS_AGENT_API_KEY` | _(none)_ | API key for auth |
+| `OPS_AGENT_CORS_ORIGINS` | `http://127.0.0.1:8080,http://localhost:8080` | Allowed CORS origins |
 | `OPS_AGENT_RATE_LIMIT` | `60` | Requests per minute per IP |
-| `OPS_AGENT_BEDROCK_MODEL` | `claude-haiku-4.5` | Bedrock model for chat |
+| `OPS_AGENT_RATE_BURST` | `15` | Burst limit |
+| `OPS_AGENT_BEDROCK_MODEL` | `us.anthropic.claude-haiku-4-5-20251001-v1:0` | Bedrock model ID |
 | `OPS_AGENT_BEDROCK_REGION` | `us-east-1` | Bedrock region |
-| `OPS_AGENT_AUDIT_LOG` | `ops_agent_audit.log` | Audit log file |
+| `OPS_AGENT_AUDIT_LOG` | `ops_agent_audit.log` | Audit log path |
+
+---
+
+## IAM Permissions
+
+### Minimum for Scanning (Read-Only)
+
+The `ReadOnlyAccess` managed policy covers most skills. Key permissions:
+
+```
+ec2:Describe*, rds:Describe*, s3:List*, s3:GetBucket*,
+lambda:List*, lambda:GetFunction, ecs:List*, ecs:Describe*,
+elasticloadbalancing:Describe*, iam:List*, iam:GetUser,
+cloudwatch:GetMetricStatistics, cloudwatch:DescribeAlarms,
+cloudtrail:LookupEvents, config:Describe*, config:List*,
+guardduty:List*, guardduty:GetFindings, securityhub:GetFindings,
+health:Describe*, support:DescribeTrustedAdvisor*,
+ce:GetCostAndUsage, ce:GetAnomalies, ce:GetSavingsPlansPurchaseRecommendation,
+ce:GetReservationUtilization, ce:GetReservationCoverage,
+service-quotas:GetServiceQuota, service-quotas:ListServiceQuotas,
+organizations:List*, sts:GetCallerIdentity, sts:AssumeRole,
+bedrock:InvokeModel
+```
+
+### Additional for Remediation (Write)
+
+```
+ec2:DeleteVolume, ec2:ReleaseAddress, ec2:DeleteNatGateway,
+ec2:StopInstances, ec2:RevokeSecurityGroupIngress,
+ec2:CreateTags, ec2:CreateFlowLogs, ec2:CancelCapacityReservation,
+rds:StopDBInstance, rds:ModifyDBInstance, rds:AddTagsToResource,
+s3:PutPublicAccessBlock, s3:PutBucketTagging,
+iam:UpdateAccessKey,
+lambda:UpdateFunctionConfiguration, lambda:TagResource
+```
+
+### For Org-Wide Scanning
+
+Requires `sts:AssumeRole` and a cross-account role (`OrganizationAccountAccessRole`) in each member account with the above permissions.
 
 ---
 
 ## Testing
 
 ```bash
-cd aws-ops-agent
+# Run all 359 tests
 python3 -m pytest tests/ -v
-# 359 tests, all passing, ~1.3 seconds
+
+# Run specific test file
+python3 -m pytest tests/test_skill_costopt_intelligence.py -v
+
+# Run with coverage
+python3 -m pytest tests/ --cov=ops_agent --cov-report=term-missing
 ```
 
-Covers all 12 skills, all 18 remediations, all API endpoints, security middleware, chat guardrails, notifications, and core framework.
+Test coverage:
+- All 12 skills (scan logic, finding generation, severity mapping, edge cases)
+- All 18 remediation handlers (success + failure + edge cases)
+- All API endpoints (scan, remediate, chat, jobs, org-scan, health)
+- Security middleware (API key auth, rate limiting, input validation)
+- Chat guardrails (77 test cases: prompt injection, topic boundaries, output sanitization)
+- Notifications (Slack, SNS)
+- Core framework (Finding, SkillResult, SkillRegistry)
+
+---
+
+## CLI Reference
+
+```bash
+# Launch dashboard
+python3 -m ops_agent.cli --profile PROFILE dashboard [--host HOST] [--port PORT] [--api-key KEY]
+
+# Run all skills (CLI output)
+python3 -m ops_agent.cli --profile PROFILE run [--skill SKILL] [--export FILE.json]
+
+# Org-wide scan
+python3 -m ops_agent.cli --profile PROFILE org-scan [--role ROLE] [--skill SKILL]
+
+# List skills
+python3 -m ops_agent.cli skills
+
+# With notifications
+python3 -m ops_agent.cli --profile PROFILE run --slack-webhook URL --sns-topic ARN
+```
 
 ---
 
 ## Troubleshooting
 
-| Problem | Solution |
-|---------|----------|
-| `command not found: ops-agent` | Use `python3 -m ops_agent.cli` instead |
+| Issue | Solution |
+|-------|----------|
+| `command not found: ops-agent` | Use `python3 -m ops_agent.cli` instead, or add `~/Library/Python/3.9/bin` to PATH |
+| Missing credentials | `aws configure --profile your-profile` |
 | Bedrock chat not working | Enable Claude model in Bedrock console for us-east-1 |
-| 401 on API calls | Pass `X-API-Key` header |
+| Port 8080 in use | `--port 9090` |
+| 401 Unauthorized | Pass `X-API-Key` header (check terminal for the key) |
 | 429 Too Many Requests | Rate limited — wait 60 seconds |
-| Skills return no findings | Check AWS permissions — need ReadOnlyAccess minimum |
 | Org scan fails | Verify cross-account role exists with correct trust policy |
+| Static files not updating | Restart server — cache version is bumped in index.html |
+
+---
+
+## Changelog
+
+### v0.3.0 (Current)
+- Added CostOpt Intelligence skill (Savings Plans, RI, right-sizing, EBS/S3 optimization)
+- Security hardening: API key auth, CORS lockdown, rate limiting, security headers
+- Chat guardrails: prompt injection protection, topic boundaries, output sanitization
+- Audit logging for all remediations and chat requests
+- 359 unit tests
+- One-click ECS Fargate deployment (CloudFormation + deploy script)
+- Docker Compose support
+- Health check endpoint (`/api/health`)
+- Configurable Bedrock model via environment variable
+
+### v0.2.0
+- 11 scanning skills
+- Web dashboard with real-time findings
+- AI chat assistant (Bedrock Claude)
+- 18 one-click Fix It actions
+- Org-wide scanning
+- CLI with JSON export
+- Slack and SNS notifications

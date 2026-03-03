@@ -16,4 +16,3 @@ ops_agent_audit.log
 # Standalone scripts with real account IDs
 tag_all_resources.py
 test.docx
-.venv-mcp/
